@@ -48,8 +48,8 @@ fn base58_decode(base58_string: &str) -> Vec<u8> {
     unimplemented!("implement the logic")
 }
 
-// Deserialize the extended pubkey bytes and return a ExKey object
-// Bip32 Serialization format: https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki#serialization-format
+// Deserialize the extended key bytes and return a JSON object
+// https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki#serialization-format
 // 4 byte: version bytes (mainnet: 0x0488B21E public, 0x0488ADE4 private; testnet: 0x043587CF public, 0x04358394 private)
 // 1 byte: depth: 0x00 for master nodes, 0x01 for level-1 derived keys, ....
 // 4 bytes: the fingerprint of the parent's key (0x00000000 if master key)
@@ -148,4 +148,10 @@ pub fn recover_wallet_state(
         private_keys,
         witness_programs,
     })
+}
+
+pub fn run(rpc_cookie_filepath: &str) -> Result<(), ()> {
+    let utxos = recover_wallet_state(EXTENDED_PRIVATE_KEY, rpc_cookie_filepath)?;
+    let balance: println!("{} {:.8}", WALLET_NAME, balance);
+    Ok(())
 }
