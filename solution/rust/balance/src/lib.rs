@@ -353,7 +353,7 @@ pub fn recover_wallet_state(
         //
         // FIXME: refactor this papiro ridiculous code
         //
-        println!("Processing block: {}/{}", block_number, end_block);
+        //println!("Processing block: {}/{}", block_number, end_block);
         if let Some(transactions) = block_json["tx"].as_array() {
             for tx in transactions {
                 let txd: &str = tx.as_str().unwrap();
