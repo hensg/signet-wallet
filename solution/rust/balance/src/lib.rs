@@ -48,24 +48,24 @@ struct ExKey {
     key: [u8; 33], // TODO: back to 32
 }
 
+pub struct UTXO {
+    pub txid: String,
+    pub output_index: u32,
+    pub amount: u64,
+}
+
 // final wallet state struct
 pub struct WalletState {
-    utxos: Vec<Vec<u8>>,
-    witness_programs: Vec<Vec<u8>>,
-    public_keys: Vec<Vec<u8>>,
-    private_keys: Vec<Vec<u8>>,
+    pub utxos: Vec<UTXO>,
+    pub witness_programs: Vec<Vec<u8>>,
+    pub public_keys: Vec<Vec<u8>>,
+    pub private_keys: Vec<Vec<u8>>,
 }
 
 impl WalletState {
     // Given a WalletState find the balance is satoshis
-    pub fn balance(&self) -> f64 {
-        self.utxos
-            .iter()
-            .map(|utxo| {
-                let value_bytes = &utxo[..8]; // First 8 bytes represent the value
-                f64::from_be_bytes(value_bytes.try_into().expect("Invalid UTXO format"))
-            })
-            .sum()
+    pub fn balance(&self) -> u64 {
+        self.utxos.iter().map(|utxo| utxo.amount).sum()
     }
 }
 
@@ -318,7 +318,7 @@ pub fn recover_wallet_state(
     let mut outgoing_txs: Vec<Vec<u8>> = vec![];
     let mut my_vouts_by_txid: HashMap<String, Vec<u32>> = HashMap::new();
     let mut spending_txs: Vec<Vec<u8>> = vec![];
-    let mut utxos: Vec<Vec<u8>> = vec![];
+    let mut utxos: Vec<UTXO> = vec![];
 
     // FIXME: horrible bcli usage
     let latest_block_result = bcli(&format!("-signet getblockcount"))?;
@@ -445,18 +445,10 @@ pub fn recover_wallet_state(
         if let Some(vouts) = tx_data["vout"].as_array() {
             for vout_n in my_vouts_by_txid.get(txid).unwrap() {
                 let my_vout = &vouts[*vout_n as usize];
-                if spent_txid_vout
+                if !spent_txid_vout
                     .get(txid)
                     .is_some_and(|v| v.contains(vout_n))
                 {
-                    //println!(
-                    //    "Spent   tx: {}, n: {}, value: {}",
-                    //    txid,
-                    //    vout_n,
-                    //    &my_vout.get("value").unwrap()
-                    //);
-                    // println!("tx: {}, n: {}, vout: {:?}", txid, vout_n, my_vout);
-                } else {
                     //println!(
                     //    "Unspent tx: {}, n: {}, value: {}",
                     //    txid,
@@ -464,15 +456,23 @@ pub fn recover_wallet_state(
                     //    &my_vout.get("value").unwrap()
                     //);
 
-                    utxos.push(
-                        my_vout
-                            .get("value")
-                            .unwrap()
-                            .as_f64()
-                            .unwrap()
-                            .to_be_bytes()
-                            .to_vec(),
-                    );
+                    let value_btc = my_vout.get("value").unwrap().as_f64().unwrap();
+                    let amount = (value_btc * 100000000.0) as u64;
+                    let utxo = UTXO {
+                        txid: txid.to_string(),
+                        output_index: *vout_n,
+                        amount,
+                    };
+                    utxos.push(utxo);
+                    //utxos.push(
+                    //    my_vout
+                    //        .get("value")
+                    //        .unwrap()
+                    //        .as_f64()
+                    //        .unwrap()
+                    //        .to_be_bytes()
+                    //        .to_vec(),
+                    //);
                 }
             }
         }
