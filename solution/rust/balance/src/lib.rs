@@ -1,6 +1,7 @@
 #![allow(unused)]
 use std::{path::PathBuf, process::Command};
 
+use tracing::{debug, info};
 // TODO: completly remove the btc dependency for pub key generation
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::{Address, Network};
@@ -48,13 +49,17 @@ struct ExKey {
     key: [u8; 33], // TODO: back to 32
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub struct UTXO {
     pub txid: String,
-    pub output_index: u32,
+    pub index: u32,
     pub amount: u64,
+    pub script_pubkey: Vec<u8>,
+    pub raw_utxo: Vec<u8>,
 }
 
 // final wallet state struct
+#[derive(Debug, PartialEq, Clone)]
 pub struct WalletState {
     pub utxos: Vec<UTXO>,
     pub witness_programs: Vec<Vec<u8>>,
@@ -337,15 +342,18 @@ pub fn recover_wallet_state(
         let block_hash_result = bcli(&block_hash_cmd).unwrap();
         let block_hash = std::str::from_utf8(&block_hash_result).unwrap().trim();
 
-        let block_cmd = format!("-signet getblock {}", block_hash);
+        let block_cmd = format!("-signet getblock {} 2", block_hash);
         //println!("Executing: {}", block_cmd);
         let block_result = bcli(&block_cmd).unwrap();
         let block_data = std::str::from_utf8(&block_result).unwrap();
 
         let block_json: Value = match serde_json::from_str(block_data) {
-            Ok(data) => data,
+            Ok(data) => {
+                // println!("Block: {:#?}", data);
+                data
+            }
             Err(error) => {
-                anyhow::anyhow!(error);
+                eprintln!("{}", error);
                 continue;
             }
         };
@@ -355,18 +363,9 @@ pub fn recover_wallet_state(
         //
         //println!("Processing block: {}/{}", block_number, end_block);
         if let Some(transactions) = block_json["tx"].as_array() {
-            for tx in transactions {
-                let txd: &str = tx.as_str().unwrap();
-                let gettrans = format!("-signet getrawtransaction {} 2 {}", txd, block_hash);
-                let trans_result = bcli(&gettrans).unwrap();
-                let trans_data = std::str::from_utf8(&trans_result).unwrap();
-                let transaction: Value = match serde_json::from_str(trans_data) {
-                    Ok(data) => data,
-                    Err(error) => {
-                        anyhow::anyhow!(error);
-                        continue;
-                    }
-                };
+            for transaction in transactions {
+                let txid = transaction.get("txid").unwrap().as_str().unwrap();
+                //println!("Txid: {:#?}", txid);
                 if let Some(vout) = transaction["vout"].as_array() {
                     for output in vout {
                         if let Some(script_pub_key) = output.get("scriptPubKey") {
@@ -380,10 +379,10 @@ pub fn recover_wallet_state(
                                         {
                                             outgoing_txs
                                                 .push(serde_json::to_vec(&transaction).unwrap());
-                                            //println!("{:#?}", vout);
-                                            let vouts = my_vouts_by_txid
-                                                .entry(txd.to_string())
-                                                .or_insert(vec![]);
+                                            let txid_str = txid.to_string();
+                                            //println!("{:#?}", txid_str);
+                                            let vouts =
+                                                my_vouts_by_txid.entry(txid_str).or_insert(vec![]);
                                             vouts.push(
                                                 output
                                                     .get("n")
@@ -393,6 +392,15 @@ pub fn recover_wallet_state(
                                                     .try_into()
                                                     .unwrap(),
                                             );
+                                            if vout.len() >= 1
+                                                && vout.len() <= 3
+                                                && transaction["vin"].as_array().unwrap().len() <= 2
+                                            {
+                                                debug!(
+                                                    "Transaction: {:#?}",
+                                                    transaction.get("hex").unwrap()
+                                                );
+                                            }
                                         }
                                     }
                                     Some(_) => {}
@@ -441,12 +449,13 @@ pub fn recover_wallet_state(
     }
     for transaction in outgoing_txs {
         let tx_data: Value = serde_json::from_slice(&transaction).unwrap();
-        let txid = tx_data["txid"].as_str().unwrap();
+        let txid = tx_data["txid"].as_str().unwrap().to_string();
+        //println!("{:#?}", txid);
         if let Some(vouts) = tx_data["vout"].as_array() {
-            for vout_n in my_vouts_by_txid.get(txid).unwrap() {
+            for vout_n in my_vouts_by_txid.get(&txid).unwrap() {
                 let my_vout = &vouts[*vout_n as usize];
                 if !spent_txid_vout
-                    .get(txid)
+                    .get(&txid)
                     .is_some_and(|v| v.contains(vout_n))
                 {
                     //println!(
@@ -460,8 +469,20 @@ pub fn recover_wallet_state(
                     let amount = (value_btc * 100000000.0) as u64;
                     let utxo = UTXO {
                         txid: txid.to_string(),
-                        output_index: *vout_n,
+                        index: *vout_n,
                         amount,
+                        script_pubkey: hex::decode(
+                            my_vout
+                                .get("scriptPubKey")
+                                .expect("Missing scriptPubKey field")
+                                .get("hex")
+                                .expect("Missing hex field")
+                                .as_str()
+                                .expect("hex not a string"),
+                        )
+                        .unwrap(),
+                        raw_utxo: hex::decode(tx_data.get("hex").unwrap().as_str().unwrap())
+                            .unwrap(),
                     };
                     utxos.push(utxo);
                     //utxos.push(
@@ -476,30 +497,30 @@ pub fn recover_wallet_state(
                 }
             }
         }
-
-        //match txid_vout.get(txid) {
-        //    Some(vout_index) => {
-
-        //        //if let Some(vout) = tx_data["vout"].as_array() {
-        //        //    let output = &vout[*vout_index];
-        //        //    let value = &output["value"]
-        //        //        .as_f64()
-        //        //        .expect("Failed to decode value as f64");
-        //        //    //println!("Spent: {:#?}", &value);
-        //        //}
-        //    }
-        //    None => {
-        //        // utxo
-        //        let my_vouts = my_vouts_by_txid.get(txid).unwrap();
-        //        let vouts = tx_data["vout"].as_array();
-        //        for my_vout in my_vouts {
-        //            println!("Vouts: {:#?}", my_vout);
-        //        }
-        //        let utxo_value: Vec<u8> = vec![];
-        //        utxos.push(utxo_value);
-        //    }
-        //}
     }
+
+    //    //match txid_vout.get(txid) {
+    //    //    Some(vout_index) => {
+
+    //    //        //if let Some(vout) = tx_data["vout"].as_array() {
+    //    //        //    let output = &vout[*vout_index];
+    //    //        //    let value = &output["value"]
+    //    //        //        .as_f64()
+    //    //        //        .expect("Failed to decode value as f64");
+    //    //        //    //println!("Spent: {:#?}", &value);
+    //    //        //}
+    //    //    }
+    //    //    None => {
+    //    //        // utxo
+    //    //        let my_vouts = my_vouts_by_txid.get(txid).unwrap();
+    //    //        let vouts = tx_data["vout"].as_array();
+    //    //        for my_vout in my_vouts {
+    //    //            println!("Vouts: {:#?}", my_vout);
+    //    //        }
+    //    //        let utxo_value: Vec<u8> = vec![];
+    //    //        utxos.push(utxo_value);
+    //    //    }
+    //    //}
 
     // Check every tx input (witness) for our own compressed public keys. These are coins we have spent.
     // Check every tx output for our own witness programs. These are coins we have received.
