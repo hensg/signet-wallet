@@ -240,15 +240,13 @@ fn get_p2wpkh_witness(privkey: &[u8; 32], msg: Vec<u8>) -> Vec<u8> {
 // https://github.com/bitcoin/bips/blob/master/bip-0147.mediawiki
 fn get_p2wsh_witness(privs: Vec<&[u8; 32]>, msg: Vec<u8>, redeem_script: &[u8]) -> Vec<u8> {
     let mut serialized_witness = Vec::new();
-    let placeholder_index = serialized_witness.len();
     serialized_witness.push(0);
     serialized_witness.push(0x00);
     let mut witness_count = 1;
     for privkey in privs {
         let der_signature = sign(privkey, msg.clone());
-        serialized_witness.push(der_signature.len() as u8 + 1); // +1 for SIGHASH_ALL byte
+        serialized_witness.push(der_signature.len() as u8);
         serialized_witness.extend(&der_signature);
-        serialized_witness.push(0x01); // SIGHASH_ALL byte
         witness_count += 1;
     }
 
@@ -256,7 +254,7 @@ fn get_p2wsh_witness(privs: Vec<&[u8; 32]>, msg: Vec<u8>, redeem_script: &[u8]) 
     serialized_witness.extend_from_slice(redeem_script);
     witness_count += 1;
 
-    serialized_witness[placeholder_index] = witness_count as u8;
+    serialized_witness[0] = witness_count as u8;
     serialized_witness
 }
 
