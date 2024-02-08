@@ -77,7 +77,7 @@ fn main() {
     let (txid1, tx1) = spend_p2wpkh(&wallet_state).unwrap();
 
     let txhex = &hex::encode(&tx1);
-    print_fields(txhex);
+    // print_fields(txhex);
     println!("tx1: {:?}", txhex);
 
     let decoderawtransaction = bcli(&format!("-signet decoderawtransaction {}", txhex)).unwrap();

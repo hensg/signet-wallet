@@ -350,8 +350,12 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
     );
 
     // Compute change output script and output
-    let change_output =
-        output_from_options(&previous_output_script, utxo.amount as u64 - AMT - FEE);
+    let mut change_script = Vec::with_capacity(25);
+    change_script.extend_from_slice(&[0x76, 0xa9, 0x14]); // OP_DUP OP_HASH160 and push 20 bytes
+    change_script.extend_from_slice(&wallet_state.witness_programs[0][2..22]);
+    change_script.extend_from_slice(&[0x88, 0xac]);
+    let change_output = output_from_options(&change_script, utxo.amount as u64 - AMT - FEE);
+    debug!("Change script: {:?}", hex::encode(&change_script));
     debug!("Change value: {:?}", utxo.amount as u64 - AMT - FEE);
 
     // // Get the message to sign
@@ -371,7 +375,7 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
                 raw_utxo: vec![],
             },
             UTXO {
-                script_pubkey: previous_output_script.clone(),
+                script_pubkey: change_script.clone(),
                 amount: utxo.amount as u64 - AMT - FEE,
                 txid: "".to_string(),
                 index: 0,
