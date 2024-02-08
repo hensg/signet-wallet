@@ -208,11 +208,11 @@ fn get_p2wpkh_witness(privkey: &[u8; 32], msg: Vec<u8>) -> Vec<u8> {
     let secret_key = SecretKey::from_slice(privkey).expect("Invalid private key");
     let public_key = PublicKey::from_secret_key(&secp, &secret_key);
     let compressed_pubkey = public_key.serialize();
-    println!("Building witness privkey: {:?}", hex::encode(&privkey));
-    println!(
-        "Building witness pubkey: {:?}",
-        hex::encode(&compressed_pubkey)
-    );
+    //println!("Building witness privkey: {:?}", hex::encode(&privkey));
+    //println!(
+    //    "Building witness pubkey: {:?}",
+    //    hex::encode(&compressed_pubkey)
+    //);
 
     assert_eq!(
         compressed_pubkey.len(),
@@ -238,16 +238,25 @@ fn get_p2wpkh_witness(privkey: &[u8; 32], msg: Vec<u8>) -> Vec<u8> {
 // as defined in BIP 141
 // Remember to add a 0x00 byte as the first witness element for CHECKMULTISIG bug
 // https://github.com/bitcoin/bips/blob/master/bip-0147.mediawiki
-fn get_p2wsh_witness(privs: Vec<&[u8; 32]>, msg: Vec<u8>) -> Vec<u8> {
+fn get_p2wsh_witness(privs: Vec<&[u8; 32]>, msg: Vec<u8>, redeem_script: &[u8]) -> Vec<u8> {
     let mut serialized_witness = Vec::new();
+    let placeholder_index = serialized_witness.len();
+    serialized_witness.push(0);
     serialized_witness.push(0x00);
+    let mut witness_count = 1;
     for privkey in privs {
         let der_signature = sign(privkey, msg.clone());
-
-        serialized_witness.push((der_signature.len() as u8).to_le());
-        serialized_witness.extend(der_signature);
+        serialized_witness.push(der_signature.len() as u8 + 1); // +1 for SIGHASH_ALL byte
+        serialized_witness.extend(&der_signature);
+        serialized_witness.push(0x01); // SIGHASH_ALL byte
+        witness_count += 1;
     }
 
+    serialized_witness.push(redeem_script.len() as u8);
+    serialized_witness.extend_from_slice(redeem_script);
+    witness_count += 1;
+
+    serialized_witness[placeholder_index] = witness_count as u8;
     serialized_witness
 }
 
@@ -400,8 +409,8 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
         .get(utxo_key_index as usize)
         .ok_or(SpendError::MissingCodeCantRun)?;
 
-    println!("Utxo PrivateKey: {:?}", hex::encode(private_key));
-    println!("Utxo PublicKey: {:?}", hex::encode(public_key));
+    //println!("Utxo PrivateKey: {:?}", hex::encode(private_key));
+    //println!("Utxo PublicKey: {:?}", hex::encode(public_key));
 
     let privkey_slice = &private_key.to_vec()[1..33];
     // debug!(
@@ -410,7 +419,6 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
     //     privkey_slice.len()
     // );
 
-    // Sign!
     let witness = get_p2wpkh_witness(&privkey_slice.try_into().unwrap(), commitment_hash);
     debug!("Witness: {:?}", hex::encode(witness.clone()));
 
@@ -433,7 +441,10 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
 }
 
 //// Spend a 2-of-2 multisig p2wsh utxo and return the transaction
-pub fn spend_p2wsh(wallet_state: &WalletState, txid: [u8; 32]) -> Result<Vec<Vec<u8>>, SpendError> {
+pub fn spend_p2wsh(
+    wallet_state: &WalletState,
+    txid: [u8; 32],
+) -> Result<([u8; 32], Vec<u8>), SpendError> {
     // COIN_VALUE = 1000000
     // FEE = 1000
     // AMT = 0
@@ -452,8 +463,103 @@ pub fn spend_p2wsh(wallet_state: &WalletState, txid: [u8; 32]) -> Result<Vec<Vec
 
     // For debugging you can use RPC `testmempoolaccept ["<final hex>"]` here
     // return txid final-tx
+    const FEE: u64 = 1000;
+    const AMT: u64 = 0;
+    let prev_utxo_amount = 1000000u64;
+    let txid_rev: Vec<u8> = txid.iter().rev().cloned().collect();
 
-    unimplemented!("implement the logic")
+    let multisig_script = create_multisig_script(wallet_state.public_keys.clone());
+    let witness_program = get_p2wsh_program(&multisig_script, None);
+
+    let utxo = UTXO {
+        txid: hex::encode(txid_rev.clone()),
+        index: 0,
+        amount: prev_utxo_amount,
+        script_pubkey: witness_program.clone(),
+        raw_utxo: vec![],
+    };
+
+    let input = input_from_utxo(&txid_rev.clone(), 0);
+
+    let op_return_data = b"Henrique dos Santos Goulart";
+    let mut op_return_script = Vec::new();
+    op_return_script.push(0x6a);
+    op_return_script.push(op_return_data.len() as u8);
+    op_return_script.extend_from_slice(op_return_data);
+
+    let mut op_return_output = Vec::new();
+    op_return_output.extend(AMT.to_le_bytes());
+    op_return_output.push(op_return_script.len() as u8);
+    op_return_output.extend_from_slice(&op_return_script);
+
+    let change_amount = prev_utxo_amount - AMT - FEE;
+    let mut change_script = Vec::with_capacity(25);
+    change_script.extend_from_slice(&[0x76, 0xa9, 0x14]); // OP_DUP OP_HASH160 and push 20 bytes
+    change_script.extend_from_slice(&wallet_state.witness_programs[0][2..22]);
+    change_script.extend_from_slice(&[0x88, 0xac]);
+    let change_output = output_from_options(&change_script, change_amount);
+
+    let commitment_hash = get_commitment_hash(
+        Outpoint {
+            txid: txid_rev.clone().try_into().unwrap(),
+            index: 0,
+        },
+        &multisig_script,
+        prev_utxo_amount,
+        vec![
+            UTXO {
+                script_pubkey: op_return_script.clone(),
+                amount: AMT,
+                txid: "".to_string(),
+                index: 0,
+                raw_utxo: vec![],
+            },
+            UTXO {
+                script_pubkey: change_script.clone(),
+                amount: change_amount,
+                txid: "".to_string(),
+                index: 0,
+                raw_utxo: vec![],
+            },
+        ],
+    );
+    let private_keys = &wallet_state.private_keys[0..2];
+    let witness = get_p2wsh_witness(
+        vec![
+            &private_keys[0][1..33].try_into().unwrap(),
+            &private_keys[1][1..33].try_into().unwrap(),
+        ],
+        commitment_hash,
+        &multisig_script,
+    );
+
+    let transaction = assemble_transaction(
+        vec![input.clone()],
+        vec![op_return_output.clone(), change_output.clone()],
+        vec![witness],
+    );
+    let final_txid = get_txid(vec![input], vec![op_return_output, change_output]);
+    Ok((final_txid, transaction))
+}
+
+fn create_op_return_output(data: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    assert!(
+        data.len() <= 80,
+        "Data size exceeds maximum allowed for OP_RETURN outputs"
+    );
+    output.extend(&0u64.to_le_bytes());
+    let mut script = Vec::new();
+    script.push(0x6a);
+    assert!(
+        data.len() <= 0xFF,
+        "Data length exceeds maximum that can be encoded with one byte"
+    );
+    script.push(data.len() as u8);
+    script.extend(data);
+    output.push(script.len() as u8);
+    output.extend(script);
+    output
 }
 
 fn get_commitment_hash2(

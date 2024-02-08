@@ -78,16 +78,26 @@ fn main() {
 
     let txhex = &hex::encode(&tx1);
     // print_fields(txhex);
-    println!("tx1: {:?}", txhex);
+    println!("{}", txhex);
 
-    let decoderawtransaction = bcli(&format!("-signet decoderawtransaction {}", txhex)).unwrap();
-    let trans: Value = serde_json::from_slice(&decoderawtransaction).unwrap();
-    println!("decoderawtransaction: {:#?}", trans);
+    //let decoderawtransaction = bcli(&format!("-signet decoderawtransaction {}", txhex)).unwrap();
+    //let trans: Value = serde_json::from_slice(&decoderawtransaction).unwrap();
+    //println!("decoderawtransaction: {:#?}", trans);
 
-    let mempool_resp = bcli(&format!("-signet testmempoolaccept [\"{}\"]", txhex)).unwrap();
-    let mempool: Value = serde_json::from_slice(&mempool_resp).unwrap();
-    println!("mempool_resp: {:#?}", mempool);
+    //let mempool_resp = bcli(&format!("-signet testmempoolaccept [\"{}\"]", txhex)).unwrap();
+    //let mempool: Value = serde_json::from_slice(&mempool_resp).unwrap();
+    //println!("mempool_resp: {:#?}", mempool);
 
-    let tx2 = spend_p2wsh(&wallet_state, txid1).unwrap();
-    println!("tx2: {:?}", tx2);
+    let (_txid2, tx2) = spend_p2wsh(&wallet_state, txid1).unwrap();
+    let txhex2 = &hex::encode(&tx2);
+
+    //let decoderawtransaction2 = bcli(&format!("-signet decoderawtransaction {}", txhex2)).unwrap();
+    //let trans2: Value = serde_json::from_slice(&decoderawtransaction2).unwrap();
+    //println!("decoderawtransaction: {:#?}", trans2);
+
+    //let mempool_resp2 = bcli(&format!("-signet testmempoolaccept [\"{}\"]", txhex2)).unwrap();
+    //let mempool2: Value = serde_json::from_slice(&mempool_resp2).unwrap();
+    //println!("mempool_resp: {:#?}", mempool2);
+
+    println!("{}", txhex2);
 }
