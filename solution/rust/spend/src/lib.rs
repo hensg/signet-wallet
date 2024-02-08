@@ -1,10 +1,11 @@
 #![allow(unused)]
 extern crate balance;
-use balance::{WalletState, UTXO};
+use balance::{bcli, WalletState, UTXO};
+
+use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
 
 use hex;
-use libsecp256k1::curve::Scalar;
-use libsecp256k1::{Message, PublicKey, SecretKey, Signature};
+
 use sha2::{Digest, Sha256};
 
 const FEE: u64 = 1000;
@@ -27,8 +28,8 @@ pub struct Outpoint {
 // a 2-of-2 multisig output script. No length byte prefix is necessary.
 fn create_multisig_script(keys: Vec<Vec<u8>>) -> Vec<u8> {
     let (first, second) = (keys[0].clone(), keys[1].clone());
-    debug!("First signature: {:?}", hex::encode(first.clone()));
-    debug!("Second signature: {:?}", hex::encode(second.clone()));
+    debug!("First pubkey: {:?}", hex::encode(first.clone()));
+    debug!("Second pubkey: {:?}", hex::encode(second.clone()));
     let mut script = Vec::new();
     script.push(0x52); // OP_2
     script.push(0x21); // size of pub key (33 byte)
@@ -164,102 +165,10 @@ fn get_commitment_hash(
     debug!("Commitment img: {:?}", hex::encode(&data));
     commitment_hash
 }
-
-fn get_commitment_hash2(
-    outpoint: Outpoint,
-    outpoint2: Outpoint,
-    scriptcode: &[u8],
-    scriptcode2: &[u8],
-    value: u64,
-    value2: u64,
-    outputs: Vec<UTXO>,
-) -> Vec<u8> {
-    let mut data = Vec::new();
-    data.extend(&1u32.to_le_bytes());
-    let mut outpoints = Vec::new();
-    outpoints.extend_from_slice(&outpoint.txid);
-    outpoints.extend(&outpoint.index.to_le_bytes());
-    outpoints.extend_from_slice(&outpoint2.txid);
-    outpoints.extend(&outpoint2.index.to_le_bytes());
-    let hash_prevouts = &hash256(&outpoints);
-    println!("Hash prevouts: {:?}", hex::encode(&hash_prevouts));
-    data.extend(hash_prevouts);
-    let sequence1 = 0xeeffffffu32;
-    let sequence2 = 0xffffffffu32;
-    let sequence = 0xffffffffffffffeeu64;
-    let hashed_seq = &hash256(&sequence.to_le_bytes());
-    println!("Hashed sequence: {:?}", hex::encode(&hashed_seq));
-    data.extend(hashed_seq);
-    println!(
-        "Outpoint: {:?}{:?}",
-        hex::encode(&outpoint2.txid),
-        hex::encode(&outpoint2.index.to_le_bytes())
-    );
-    data.extend_from_slice(&outpoint2.txid);
-    data.extend_from_slice(&outpoint2.index.to_le_bytes());
-
-    //data.extend(&outpoint.index.to_le_bytes());
-    //data.extend_from_slice(scriptcode);
-    //data.extend(&value.to_le_bytes());
-    //data.extend(&sequence1.to_le_bytes());
-
-    let mut scriptcode_with_len: Vec<u8> = vec![];
-    scriptcode_with_len.push(scriptcode2.len() as u8);
-    scriptcode_with_len.extend_from_slice(scriptcode2);
-
-    println!("Scriptcode: {:?}", hex::encode(&scriptcode_with_len));
-    data.extend_from_slice(&scriptcode_with_len);
-
-    println!("Amount: {:?}", hex::encode(&value2.to_le_bytes()));
-    data.extend(&value2.to_le_bytes());
-    println!("Sequence: {:?}", hex::encode(&sequence2.to_le_bytes()));
-    data.extend(&sequence2.to_le_bytes());
-
-    let mut outputs_data = Vec::new();
-    for output in outputs {
-        println!(
-            "Output amount and pubkey: {:?} {:?}",
-            hex::encode(output.amount.to_le_bytes()),
-            hex::encode(&output.script_pubkey)
-        );
-        outputs_data.extend(&output.amount.to_le_bytes());
-        outputs_data.push(output.script_pubkey.len() as u8);
-        outputs_data.extend_from_slice(&output.script_pubkey);
-    }
-    let hash_outs = &hash256(&outputs_data);
-    println!("Hash outputs: {:?}", hex::encode(&hash_outs));
-    data.extend(hash_outs);
-
-    let locktime = 0x11u32; // Default locktime
-    let locktime_bytes = &locktime.to_le_bytes();
-    println!("Locktime: {:?}", hex::encode(locktime_bytes));
-    data.extend(locktime_bytes);
-    let sighash_all_bytes = &1u32.to_le_bytes();
-    println!("Sighash all: {:?}", hex::encode(sighash_all_bytes));
-    data.extend(sighash_all_bytes); // SIGHASH_ALL
-    let commitment_hash = hash256(&data);
-    println!("sigHash: {:?}", hex::encode(&commitment_hash));
-    println!("preImage: {:?}", hex::encode(&data));
-    //commitment_hash
-    data
-}
-
 // Given a JSON utxo object and a list of all of our wallet's witness programs,
 // return the index of the derived key that can spend the coin.
 // This index should match the corresponding private key in our wallet's list.
 fn get_key_index(utxo: &UTXO, programs: &Vec<String>) -> u32 {
-    //let key_hash = if utxo.script_pubkey.starts_with(&[0x00, 0x14]) {
-    //    utxo.script_pubkey[2..22].to_vec()
-    //} else if utxo.script_pubkey.len() == 25
-    //    && utxo.script_pubkey.starts_with(&[0x76, 0xa9, 0x14])
-    //    && utxo.script_pubkey.ends_with(&[0x88, 0xac])
-    //{
-    //    utxo.script_pubkey[3..23].to_vec()
-    //} else {
-    //    panic!("ScriptPubKey not recognized");
-    //};
-    //
-    //let key_hash_str = hex::encode(key_hash);
     let key_hash_str = hex::encode(&utxo.script_pubkey);
 
     for (index, program) in programs.iter().enumerate() {
@@ -278,20 +187,15 @@ fn get_key_index(utxo: &UTXO, programs: &Vec<String>) -> u32 {
 // - Must have a low s value as defined by BIP 62:
 //   https://github.com/bitcoin/bips/blob/master/bip-0062.mediawiki#user-content-Low_S_values_in_signatures
 fn sign(privkey: &[u8; 32], msg: Vec<u8>) -> Vec<u8> {
-    let secret_key = SecretKey::parse_slice(privkey).expect("Invalid private key");
-    let message = Message::parse_slice(&msg).expect("Invalid message");
-    loop {
-        let (signature, recover_id) = libsecp256k1::sign(&message, &secret_key);
-        if signature.s.is_high() {
-            debug!("Ixii");
-            continue; // Re-sign if 's' value is high
-        }
-
-        let der_sign = signature.serialize_der();
-        let mut final_signature = der_sign.as_ref().to_vec();
-        final_signature.push(0x01); // Append SIGHASH_ALL
-        return final_signature;
-    }
+    let secp = Secp256k1::new();
+    let secret_key = SecretKey::from_slice(privkey).expect("Invalid private key");
+    let message = Message::from_slice(&msg).expect("Invalid message");
+    let mut signature = secp.sign_ecdsa(&message, &secret_key);
+    signature.normalize_s();
+    let der_sign = signature.serialize_der();
+    let mut final_signature = der_sign.as_ref().to_vec();
+    final_signature.push(0x01); // Append SIGHASH_ALL
+    return final_signature;
 }
 
 // Given a private key and transaction commitment hash to sign,
@@ -299,10 +203,26 @@ fn sign(privkey: &[u8; 32], msg: Vec<u8>) -> Vec<u8> {
 // as defined in BIP 141 (2 stack items: signature, compressed public key)
 // https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki#specification
 fn get_p2wpkh_witness(privkey: &[u8; 32], msg: Vec<u8>) -> Vec<u8> {
-    let der_signature = sign(privkey, msg);
-    let secret_key = SecretKey::parse_slice(privkey).expect("Invalid private key");
-    let public_key = PublicKey::from_secret_key(&secret_key);
-    let compressed_pubkey = public_key.serialize().to_vec();
+    let secp = Secp256k1::new();
+    let der_signature = sign(&privkey, msg);
+    let secret_key = SecretKey::from_slice(privkey).expect("Invalid private key");
+    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+    let compressed_pubkey = public_key.serialize();
+    println!("Building witness privkey: {:?}", hex::encode(&privkey));
+    println!(
+        "Building witness pubkey: {:?}",
+        hex::encode(&compressed_pubkey)
+    );
+
+    assert_eq!(
+        compressed_pubkey.len(),
+        33,
+        "Compressed pubkey size is wrong"
+    );
+    assert!(
+        compressed_pubkey[0] == 0x02 || compressed_pubkey[0] == 0x03,
+        "Invalid pubkey"
+    );
 
     let mut serialized_witness = Vec::new();
     serialized_witness.push(0x02);
@@ -402,6 +322,7 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
         .find(|u| u.amount > AMT + FEE)
         .ok_or(SpendError::InsufficientFunds)?;
 
+    //println!("Utxo: {:#?}", &utxo);
     debug!("Utxo script: {:?}", hex::encode(&utxo.script_pubkey));
     debug!("Utxo txid: {:?}", &utxo.txid);
 
@@ -441,13 +362,22 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
         },
         &previous_output_script,
         utxo.amount,
-        vec![UTXO {
-            script_pubkey: witness_program.clone(),
-            amount: AMT,
-            txid: "".to_string(),
-            index: 0,
-            raw_utxo: vec![],
-        }],
+        vec![
+            UTXO {
+                script_pubkey: witness_program.clone(),
+                amount: AMT,
+                txid: "".to_string(),
+                index: 0,
+                raw_utxo: vec![],
+            },
+            UTXO {
+                script_pubkey: previous_output_script.clone(),
+                amount: utxo.amount as u64 - AMT - FEE,
+                txid: "".to_string(),
+                index: 0,
+                raw_utxo: vec![],
+            },
+        ],
     );
     // Fetch the private key we need to sign with
     let programs: Vec<String> = wallet_state
@@ -456,10 +386,18 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
         .map(|x| hex::encode(x))
         .collect();
 
+    let utxo_key_index = get_key_index(&utxo, &programs);
     let private_key = wallet_state
         .private_keys
-        .get(get_key_index(&utxo, &programs) as usize)
+        .get(utxo_key_index as usize)
         .ok_or(SpendError::MissingCodeCantRun)?;
+    let public_key = wallet_state
+        .public_keys
+        .get(utxo_key_index as usize)
+        .ok_or(SpendError::MissingCodeCantRun)?;
+
+    println!("Utxo PrivateKey: {:?}", hex::encode(private_key));
+    println!("Utxo PublicKey: {:?}", hex::encode(public_key));
 
     let privkey_slice = &private_key.to_vec()[1..33];
     // debug!(
@@ -512,6 +450,85 @@ pub fn spend_p2wsh(wallet_state: &WalletState, txid: [u8; 32]) -> Result<Vec<Vec
     // return txid final-tx
 
     unimplemented!("implement the logic")
+}
+
+fn get_commitment_hash2(
+    outpoint: Outpoint,
+    outpoint2: Outpoint,
+    scriptcode: &[u8],
+    scriptcode2: &[u8],
+    value: u64,
+    value2: u64,
+    outputs: Vec<UTXO>,
+) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend(&1u32.to_le_bytes());
+    let mut outpoints = Vec::new();
+    outpoints.extend_from_slice(&outpoint.txid);
+    outpoints.extend(&outpoint.index.to_le_bytes());
+    outpoints.extend_from_slice(&outpoint2.txid);
+    outpoints.extend(&outpoint2.index.to_le_bytes());
+    let hash_prevouts = &hash256(&outpoints);
+    println!("Hash prevouts: {:?}", hex::encode(&hash_prevouts));
+    data.extend(hash_prevouts);
+    let sequence1 = 0xeeffffffu32;
+    let sequence2 = 0xffffffffu32;
+    let sequence = 0xffffffffffffffeeu64;
+    let hashed_seq = &hash256(&sequence.to_le_bytes());
+    println!("Hashed sequence: {:?}", hex::encode(&hashed_seq));
+    data.extend(hashed_seq);
+    println!(
+        "Outpoint: {:?}{:?}",
+        hex::encode(&outpoint2.txid),
+        hex::encode(&outpoint2.index.to_le_bytes())
+    );
+    data.extend_from_slice(&outpoint2.txid);
+    data.extend_from_slice(&outpoint2.index.to_le_bytes());
+
+    //data.extend(&outpoint.index.to_le_bytes());
+    //data.extend_from_slice(scriptcode);
+    //data.extend(&value.to_le_bytes());
+    //data.extend(&sequence1.to_le_bytes());
+
+    let mut scriptcode_with_len: Vec<u8> = vec![];
+    scriptcode_with_len.push(scriptcode2.len() as u8);
+    scriptcode_with_len.extend_from_slice(scriptcode2);
+
+    println!("Scriptcode: {:?}", hex::encode(&scriptcode_with_len));
+    data.extend_from_slice(&scriptcode_with_len);
+
+    println!("Amount: {:?}", hex::encode(&value2.to_le_bytes()));
+    data.extend(&value2.to_le_bytes());
+    println!("Sequence: {:?}", hex::encode(&sequence2.to_le_bytes()));
+    data.extend(&sequence2.to_le_bytes());
+
+    let mut outputs_data = Vec::new();
+    for output in outputs {
+        println!(
+            "Output amount and pubkey: {:?} {:?}",
+            hex::encode(output.amount.to_le_bytes()),
+            hex::encode(&output.script_pubkey)
+        );
+        outputs_data.extend(&output.amount.to_le_bytes());
+        outputs_data.push(output.script_pubkey.len() as u8);
+        outputs_data.extend_from_slice(&output.script_pubkey);
+    }
+    let hash_outs = &hash256(&outputs_data);
+    println!("Hash outputs: {:?}", hex::encode(&hash_outs));
+    data.extend(hash_outs);
+
+    let locktime = 0x11u32; // Default locktime
+    let locktime_bytes = &locktime.to_le_bytes();
+    println!("Locktime: {:?}", hex::encode(locktime_bytes));
+    data.extend(locktime_bytes);
+    let sighash_all_bytes = &1u32.to_le_bytes();
+    println!("Sighash all: {:?}", hex::encode(sighash_all_bytes));
+    data.extend(sighash_all_bytes); // SIGHASH_ALL
+    let commitment_hash = hash256(&data);
+    println!("sigHash: {:?}", hex::encode(&commitment_hash));
+    println!("preImage: {:?}", hex::encode(&data));
+    //commitment_hash
+    data
 }
 
 // write test for fn get_commitment_hash function

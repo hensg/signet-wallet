@@ -229,7 +229,7 @@ fn get_p2wpkh_program(pubkey: &[u8]) -> Vec<u8> {
 // https://github.com/bitcoin/bitcoin/blob/master/doc/bitcoin-conf.md#configuration-file-path
 // Examples: bcli("getblockcount")
 //            bcli("getblockhash 100")
-fn bcli(cmd: &str) -> Result<Vec<u8>, BalanceError> {
+pub fn bcli(cmd: &str) -> Result<Vec<u8>, BalanceError> {
     let args = cmd.split(' ').collect::<Vec<&str>>();
 
     let result = Command::new("bitcoin-cli")
@@ -310,15 +310,15 @@ pub fn recover_wallet_state(
     let child_key = get_child_key_at_path(deserialized_key, derivation_path);
     // Compute 2000 private keys from the child key path
     let private_keys = get_keys_at_child_key_path(child_key, 2000);
-    let mut public_keys = HashSet::new();
-    let mut witness_programs = HashSet::new();
+    let mut public_keys = vec![];
+    let mut witness_programs = vec![];
 
     for key in private_keys.iter() {
         let public_key = derive_public_key_from_private(&key.key);
-        public_keys.insert(public_key.clone());
+        public_keys.push(public_key.clone());
 
         let witness_program = get_p2wpkh_program(&public_key);
-        witness_programs.insert(witness_program);
+        witness_programs.push(witness_program);
     }
     let mut outgoing_txs: Vec<Vec<u8>> = vec![];
     let mut my_vouts_by_txid: HashMap<String, Vec<u32>> = HashMap::new();
@@ -529,9 +529,9 @@ pub fn recover_wallet_state(
     // Return Wallet State
     Ok(WalletState {
         utxos,
-        public_keys: public_keys.into_iter().collect(),
+        public_keys: public_keys,
         private_keys: private_keys.into_iter().map(|k| k.key.to_vec()).collect(),
-        witness_programs: witness_programs.into_iter().collect(),
+        witness_programs: witness_programs,
     })
 }
 

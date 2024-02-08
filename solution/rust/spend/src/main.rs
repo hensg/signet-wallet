@@ -1,9 +1,11 @@
 extern crate balance;
-use balance::{recover_wallet_state, EXTENDED_PRIVATE_KEY};
+use balance::{bcli, recover_wallet_state, EXTENDED_PRIVATE_KEY};
 
 use hex;
 use tracing::debug;
 use tracing_subscriber;
+
+use serde_json::Value;
 
 use spend::{spend_p2wpkh, spend_p2wsh};
 
@@ -77,6 +79,15 @@ fn main() {
     let txhex = &hex::encode(&tx1);
     print_fields(txhex);
     println!("tx1: {:?}", txhex);
+
+    let decoderawtransaction = bcli(&format!("-signet decoderawtransaction {}", txhex)).unwrap();
+    let trans: Value = serde_json::from_slice(&decoderawtransaction).unwrap();
+    println!("decoderawtransaction: {:#?}", trans);
+
+    let mempool_resp = bcli(&format!("-signet testmempoolaccept [\"{}\"]", txhex)).unwrap();
+    let mempool: Value = serde_json::from_slice(&mempool_resp).unwrap();
+    println!("mempool_resp: {:#?}", mempool);
+
     let tx2 = spend_p2wsh(&wallet_state, txid1).unwrap();
     println!("tx2: {:?}", tx2);
 }
