@@ -466,7 +466,7 @@ pub fn recover_wallet_state(
                     //);
 
                     let value_btc = my_vout.get("value").unwrap().as_f64().unwrap();
-                    let amount = (value_btc * 100000000.0) as u64;
+                    let amount = (value_btc * 100000000.0).round() as u64;
                     let utxo = UTXO {
                         txid: txid.to_string(),
                         index: *vout_n,
@@ -529,9 +529,9 @@ pub fn recover_wallet_state(
     // Return Wallet State
     Ok(WalletState {
         utxos,
-        public_keys: public_keys,
+        public_keys,
         private_keys: private_keys.into_iter().map(|k| k.key.to_vec()).collect(),
-        witness_programs: witness_programs,
+        witness_programs,
     })
 }
 
