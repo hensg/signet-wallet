@@ -300,17 +300,17 @@ fn sign(privkey: &[u8; 32], msg: Vec<u8>) -> Vec<u8> {
 // https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki#specification
 fn get_p2wpkh_witness(privkey: &[u8; 32], msg: Vec<u8>) -> Vec<u8> {
     let der_signature = sign(privkey, msg);
-
     let secret_key = SecretKey::parse_slice(privkey).expect("Invalid private key");
     let public_key = PublicKey::from_secret_key(&secret_key);
     let compressed_pubkey = public_key.serialize().to_vec();
 
     let mut serialized_witness = Vec::new();
+    serialized_witness.push(0x02);
     serialized_witness.push(der_signature.len() as u8);
     serialized_witness.extend(&der_signature);
     serialized_witness.push(compressed_pubkey.len() as u8);
     serialized_witness.extend(&compressed_pubkey);
-    serialized_witness.to_vec()
+    serialized_witness
 }
 
 // Given two private keys and a transaction commitment hash to sign,
@@ -403,6 +403,7 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
         .ok_or(SpendError::InsufficientFunds)?;
 
     debug!("Utxo script: {:?}", hex::encode(&utxo.script_pubkey));
+    debug!("Utxo txid: {:?}", &utxo.txid);
 
     // Create the input from the utxo
     // Reverse the txid hash so it's little-endian
@@ -413,7 +414,7 @@ pub fn spend_p2wpkh(wallet_state: &WalletState) -> Result<([u8; 32], Vec<u8>), S
         &txid_rev[txid_rev.len() - 1..],
         "Txid not reversed correctly"
     );
-    debug!("Txid reversed: {:#?}", hex::encode(&txid_rev));
+    debug!("Utxo Txid reversed: {:#?}", hex::encode(&txid_rev));
     let input = input_from_utxo(&txid_rev, utxo.index);
 
     // Compute destination output script and output
